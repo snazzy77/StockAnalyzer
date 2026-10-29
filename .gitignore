@@ -1,8 +1,9 @@
 .venv/
+.venv-regression/
+data/cache/
+sec.local.json
 __pycache__/
 *.py[cod]
 
 # generated outputs
-data/processed/
-models/
 reports/

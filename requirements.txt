@@ -3,4 +3,6 @@ pandas>=2.2.0
 scikit-learn>=1.4.0
 yfinance>=0.2.44
 joblib>=1.4.0
-matplotlib>=3.8.0
+statsmodels>=0.14.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
