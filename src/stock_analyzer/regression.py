@@ -6,7 +6,8 @@ import pandas as pd
 import statsmodels.api as sm
 
 
-def features(prices: pd.DataFrame, volume: pd.Series, ticker: str, horizon: int) -> pd.DataFrame:
+def features(prices: pd.DataFrame, volume: pd.Series, ticker: str, horizon: int,
+             sector: str | None = None) -> pd.DataFrame:
     if horizon < 1:
         raise ValueError("horizon must be positive")
     close = prices[ticker]
@@ -22,8 +23,29 @@ def features(prices: pd.DataFrame, volume: pd.Series, ticker: str, horizon: int)
     if "^VIX" in prices:
         out["vix_level"] = prices["^VIX"]
         out["vix_change_5"] = prices["^VIX"].diff(5)
+    returns = close.pct_change(fill_method=None)
+    market = prices["SPY"].pct_change(fill_method=None)
+    for window in (5, 21, 63):
+        out[f"enh_volatility_{window}"] = returns.rolling(window).std()
+    out["enh_volatility_ratio"] = out["enh_volatility_5"] / out["enh_volatility_63"]
+    beta = returns.rolling(63).cov(market) / market.rolling(63).var()
+    out["enh_market_beta_63"] = beta
+    # Lag the beta so each residual uses an exposure estimated before that return.
+    out["enh_market_residual_21"] = (returns - beta.shift(1) * market).rolling(21).sum()
+    if sector is not None:
+        if sector not in prices or sector == ticker:
+            raise ValueError("Sector benchmark must be available and different from the target")
+        for window in (5, 21):
+            out[f"enh_sector_relative_{window}"] = close.pct_change(window, fill_method=None) - prices[sector].pct_change(window, fill_method=None)
+    # Previous target-session observations only: no same-day macro availability assumption.
+    if "^TNX" in prices:
+        for window in (5, 21):
+            out[f"enh_yield_change_{window}"] = prices["^TNX"].shift(1).diff(window)
+    if "DX-Y.NYB" in prices:
+        for window in (5, 21):
+            out[f"enh_dollar_return_{window}"] = prices["DX-Y.NYB"].shift(1).pct_change(window, fill_method=None)
     for name in prices:
-        if name not in (ticker, "SPY", "^VIX"):
+        if name not in (ticker, "SPY", "^VIX", "^TNX", "DX-Y.NYB"):
             out[f"peer_{name}"] = prices[name].pct_change(21, fill_method=None) - out["market_return_21"]
     out["target"] = close.shift(-horizon) / close - 1
     out["target_end"] = pd.Series(prices.index, index=prices.index).shift(-horizon)

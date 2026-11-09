@@ -41,8 +41,9 @@ frequencies, event counts, and comparisons with usual and market returns.
 **Test predictive value.** Reaction analysis compares a historical-average
 baseline, an own-stock/market/sector model, and models adding individual peers.
 Its default forecast covers five trading days. A separate rolling Ridge workflow
-produces monthly and quarterly return estimates using recent two- to four-quarter
-training windows. Optional static OLS analysis provides exploratory coefficient,
+compares baseline and enhanced cross-asset/volatility features for five-day, monthly
+and quarterly returns using training windows from two to twenty quarters. Purged
+validation blocks select configurations; reports include rank IC and period diagnostics. Optional static OLS analysis provides exploratory coefficient,
 p-value, t-statistic, F-statistic, and R-squared diagnostics.
 
 **Expose the evidence.** Reports include model comparisons, evaluation errors,

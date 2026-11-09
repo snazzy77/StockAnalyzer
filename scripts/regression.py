@@ -80,14 +80,17 @@ def main():
     parser.add_argument("--jump-threshold", type=float, default=.03)
     parser.add_argument("--reaction-horizons", type=int, nargs="+", default=[1, 5, 21])
     parser.add_argument("--forecast-days", type=int, default=5)
-    parser.add_argument("--training-quarters", type=int, nargs="+", default=[2, 3, 4])
+    parser.add_argument("--training-quarters", type=int, nargs="+", default=[2, 3, 4, 8, 12, 20])
+    parser.add_argument("--sector", help="Explicit sector ETF, e.g. SOXX for semiconductor comparisons")
+    parser.add_argument("--feature-sets", nargs="+", choices=["baseline", "enhanced"], default=["baseline", "enhanced"])
+    parser.add_argument("--validation-periods", type=int, default=3)
     parser.add_argument("--ridge-alphas", type=float, nargs="+", default=[1.0, 10.0, 100.0])
     parser.add_argument("--benchmark-quarters", type=int, default=12)
     parser.add_argument("--start-date", default="2017-01-01")
     parser.add_argument("--end-date", default=datetime.now(timezone.utc).date().isoformat(), help="Exclusive")
     parser.add_argument("--train-end", default="2021-12-31")
     parser.add_argument("--valid-end", default="2023-12-31")
-    parser.add_argument("--horizons", type=int, nargs="+", default=[21, 63])
+    parser.add_argument("--horizons", type=int, nargs="+", default=[5, 21, 63])
     parser.add_argument("--candidates", nargs="*", default=[])
     parser.add_argument("--max-peers", type=int, default=4)
     parser.add_argument("--no-yahoo-discovery", action="store_true")
@@ -96,8 +99,8 @@ def main():
     parser.add_argument("--cache-dir", type=Path, default=ROOT / "data" / "cache" / "regression")
     parser.add_argument("--out-dir", type=Path, default=ROOT / "reports" / "regression")
     args = parser.parse_args()
-    if any(q not in (2, 3, 4) for q in args.training_quarters) or any(a <= 0 for a in args.ridge_alphas) or args.benchmark_quarters <= 4:
-        parser.error("Use training quarters 2/3/4, positive Ridge alphas, and benchmark quarters > 4")
+    if any(q < 2 or q > 20 for q in args.training_quarters) or any(a <= 0 for a in args.ridge_alphas) or args.benchmark_quarters <= 4 or args.validation_periods < 2:
+        parser.error("Use training quarters 2–20, positive Ridge alphas, benchmark quarters > 4, and at least two validation periods")
     if any(h < 1 for h in args.horizons) or args.max_peers < 0:
         parser.error("Horizons must be positive and max-peers nonnegative")
     if not 0 < args.jump_threshold < 1 or args.forecast_days < 1 or any(h < 1 for h in args.reaction_horizons):
@@ -129,6 +132,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     histories = {}
     symbols = list(dict.fromkeys([ticker, "SPY", "^VIX"] + [r["ticker"] for r in candidates]))
+    if args.mode == "rolling":
+        symbols = list(dict.fromkeys(symbols + ["^TNX", "DX-Y.NYB"] + ([args.sector.upper()] if args.sector else [])))
+        if not args.sector:
+            warnings.append("No --sector supplied: sector-relative momentum omitted.")
+        warnings.append("Macro features use previous target-session observations without filling missing prices; Yahoo histories are not point-in-time vintage data. Yield changes use provider quote units.")
     for symbol in symbols:
         print(f"Loading {symbol} history...", flush=True)
         try:
@@ -157,11 +165,15 @@ def main():
     # No forward/back filling of missing prices; complete observations only.
     for horizon in args.horizons:
         print(f"Fitting {horizon}-trading-day regression...", flush=True)
-        frame = features(prices, histories[ticker].Volume, ticker, horizon)
+        frame = features(prices, histories[ticker].Volume, ticker, horizon,
+                         args.sector.upper() if args.sector and args.mode == "rolling" else None)
+        if args.mode == "static":
+            frame = frame.drop(columns=[c for c in frame if c.startswith("enh_")])
         if args.mode == "rolling":
             report, coefficients, predictions, bundle = run_rolling(
                 frame, args.train_end, args.valid_end, horizon, args.max_peers,
-                tuple(args.training_quarters), tuple(args.ridge_alphas), args.benchmark_quarters)
+                tuple(args.training_quarters), tuple(args.ridge_alphas), args.benchmark_quarters,
+                tuple(args.feature_sets), args.validation_periods)
         else:
             report, coefficients, predictions, bundle = run_regression(
                 frame, args.train_end, args.valid_end, horizon, args.max_peers)

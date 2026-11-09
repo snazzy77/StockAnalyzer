@@ -7,7 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from stock_analyzer.regression import features
-from stock_analyzer.rolling import fit_recent, recent_training, run_rolling, walk_forward
+from stock_analyzer.rolling import fit_recent, recent_training, run_rolling, walk_forward, render_report
 
 
 class RollingTests(unittest.TestCase):
@@ -19,6 +19,46 @@ class RollingTests(unittest.TestCase):
         cls.prices = prices
         cls.volume = pd.Series(rng.integers(1000, 5000, len(dates)), index=dates)
         cls.frame = features(prices, cls.volume, "NVDA", 63)
+
+    def test_enhanced_features_are_causal_and_macro_is_lagged(self):
+        prices = self.prices.copy()
+        prices["SOXX"] = prices.AMD
+        prices["^TNX"] = np.arange(len(prices), dtype=float) + 1
+        prices["DX-Y.NYB"] = prices.SPY * 2
+        frame = features(prices, self.volume, "NVDA", 5, sector="SOXX")
+        i = 900
+        self.assertAlmostEqual(frame.enh_yield_change_5.iloc[i], 5)
+        self.assertAlmostEqual(frame.enh_sector_relative_5.iloc[i],
+                               prices.NVDA.iloc[i] / prices.NVDA.iloc[i-5] - prices.SOXX.iloc[i] / prices.SOXX.iloc[i-5])
+        changed = prices.copy()
+        changed.loc[changed.index[i]:, ["^TNX", "DX-Y.NYB"]] *= 10
+        other = features(changed, self.volume, "NVDA", 5, sector="SOXX")
+        self.assertEqual(frame.enh_yield_change_5.iloc[i], other.enh_yield_change_5.iloc[i])
+        self.assertEqual(frame.enh_dollar_return_5.iloc[i], other.enh_dollar_return_5.iloc[i])
+        changed = prices.copy()
+        changed.iloc[i+1:] *= 10
+        other = features(changed, self.volume, "NVDA", 5, sector="SOXX")
+        cols = [c for c in frame if c.startswith("enh_")]
+        pd.testing.assert_frame_equal(frame.loc[:prices.index[i], cols], other.loc[:prices.index[i], cols])
+        self.assertNotIn("peer_^TNX", frame)
+
+    def test_long_windows_and_period_diagnostics(self):
+        report, coefficients, predictions, _ = run_rolling(self.frame, "2020-12-31", "2022-12-31", 63,
+                                               quarters=(4, 8), alphas=(10.0,))
+        report["ticker"] = "NVDA"
+        rendered = render_report(report, coefficients)
+        self.assertIn("Signal diagnostics", rendered)
+        self.assertIn("Test 2023", rendered)
+        self.assertIn("ridge_8q_a10_enhanced", report["comparisons"])
+        for comparison in report["comparisons"].values():
+            self.assertEqual(len(comparison["validation_periods"]), 3)
+            self.assertIn("rank_ic", comparison["test"])
+            self.assertLess(comparison["test_nonoverlap"]["rows"], comparison["test"]["rows"])
+            for period in comparison["validation_periods"]:
+                start, end = pd.Timestamp(period["start"]), pd.Timestamp(period["end"])
+                self.assertLessEqual(self.frame.loc[end, "target_end"], pd.Timestamp("2022-12-31"))
+                self.assertLessEqual(start, end)
+        self.assertEqual(report["evaluation_common_rows"]["test"], int((predictions.evaluation_split == "test").sum()))
 
     def test_window_does_not_reach_back_for_unfinished_labels(self):
         asof = self.frame.index[1000]
@@ -54,7 +94,7 @@ class RollingTests(unittest.TestCase):
                                                     quarters=(2, 3, 4), alphas=(10.0,))
         self.assertEqual(bundle.audit["asof"], str(self.frame.index[-1].date()))
         self.assertLessEqual(pd.Timestamp(bundle.audit["last_target_end"]), self.frame.index[-1])
-        self.assertLessEqual(len(bundle.mean), 6)
+        self.assertLessEqual(len(bundle.mean), 6 + len([c for c in self.frame if c.startswith("enh_")]))
         self.assertFalse(report["selected_variant"].startswith("benchmark"))
         self.assertAlmostEqual(sum(report["latest_contributions"].values()), report["latest_expected_return"])
         self.assertIn("test", predictions.evaluation_split.values)

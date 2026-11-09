@@ -84,11 +84,27 @@ the other modes; reactions uses its own chronological 60/20/20 split.
 ## Rolling recent-history regression (default)
 
 `scripts/regression.py` defaults to **monthly walk-forward Ridge regression**.
-It compares two-, three-, and four-quarter training windows and Ridge penalties
-1, 10 and 100. A quarter means approximately 63 trading observations, not a
-calendar quarter. Production selection is restricted to those recent windows
-and a four-quarter mean-return fallback. A twelve-quarter Ridge model (alpha 10)
-is also evaluated as a diagnostic benchmark, but cannot become the production model.
+It compares baseline and enhanced feature sets over 2, 3, 4, 8, 12 and 20 quarters
+with Ridge penalties 1, 10 and 100. All searched windows can win; a four-quarter
+mean fallback remains eligible. The fixed twelve-quarter benchmark is diagnostic.
+A quarter means 63 trading observations. Defaults evaluate 5-, 21- and 63-day returns.
+
+For the new feature experiment:
+
+```powershell
+.\.venv-regression\Scripts\python.exe scripts/regression.py --ticker NVDA --mode rolling --sector SOXX --horizons 5 21 63 --no-sec
+```
+
+Select a sector ETF appropriate to your ticker; there is no inferred default.
+Without `--sector`, sector-relative momentum is omitted with a warning.
+Enhanced inputs add 5/21/63-day volatility, a 5/63 volatility ratio, 63-day market
+beta, a 21-day sum of daily beta-adjusted returns (using prior-day beta), and
+5/21-day sector-relative returns. Optional `^TNX` yield changes and `DX-Y.NYB`
+dollar returns use the previous target trading session, without filling gaps.
+Yield changes are in Yahoo quote units, not automatically converted basis points.
+These histories are not point-in-time vintages; a session lag is a conservative
+availability convention, not a guarantee against provider revisions.
+Unavailable macro downloads are reported and their features omitted.
 
 ```powershell
 .\.venv-regression\Scripts\python.exe scripts/regression.py --ticker NVDA --start-date 2017-01-01 --end-date 2026-10-27 --train-end 2021-12-31 --valid-end 2023-12-31 --offline
@@ -118,10 +134,13 @@ contains approximately 63 usable origins; a four-quarter window contains 189.
 Overlapping targets are not independent quarterly outcomes.
 
 Historical features may use older prices, but older origins are not used to fit
-the coefficients. Each fit uses up to five predefined core inputs (21-day
+the coefficients. The baseline fit uses up to five predefined core inputs (21-day
 momentum, relative volume, market return, market volatility and optional VIX level)
 and up to two screened peers, capped at six inputs total. Scaling, peer screening
-and fitting are repeated using only that window.
+and fitting are repeated using only that window. The enhanced fit adds its new
+inputs before training-only constant/coverage/redundancy screening, retaining
+the same peer budget. Audits identify partial windows when full requested history
+is unavailable; provide enough initial history for fair long-window comparisons.
 At least 40 complete observations are required; skipped monthly fits are audited.
 
 ### Evaluation and the latest forecast
@@ -134,8 +153,13 @@ earlier test-period outcomes **only after those outcomes have completed**, which
 simulates ongoing deployment. Validation targets crossing `valid-end` are excluded.
 Configurations are compared on the same complete forecast dates.
 
-Validation RMSE chooses a fixed recent-window configuration or the rolling mean
-fallback; test outcomes never choose the window or penalty. The latest model is
+The mean RMSE across three chronological validation blocks chooses the window,
+penalty and feature set, or the mean fallback. Labels crossing each block's end
+are purged; each block needs 20 completed common origins. Use
+`--validation-periods 2` or extend validation if a long horizon leaves too few.
+Monthly fitting, scaling and selection use only outcomes completed at each refit.
+Test outcomes never select the configuration, though completed earlier test
+outcomes can train subsequent monthly fits as in deployment. The latest model is
 then **refitted separately as of the final input date**, using recent completed
 outcomes, and saved in the model artifact. Reports expose its exact origin dates,
 last completed target date, row count and non-overlapping-origin count.
@@ -150,11 +174,16 @@ Ridge coefficients and per-forecast contributions are reported. **Ordinary OLS
 p-values, t-tests and F-tests do not apply to these Ridge coefficients.** For the
 older exploratory HAC/OLS diagnostics use `--mode static` below.
 
-Options: `--training-quarters 2 3 4`, `--ridge-alphas 1 10 100`,
+Options: `--training-quarters 2 3 4 8 12 20`, `--feature-sets baseline enhanced`, `--ridge-alphas 1 10 100`,
 `--benchmark-quarters 12`, `--max-peers 2` (rolling mode caps this at two).
 Outputs in `reports/regression/<ticker>/rolling/` use the prefix `rolling_21d` / `rolling_63d` and include Markdown, JSON,
 coefficient/prediction CSVs and a latest-refit model. JSON includes every monthly
-fit's audit. Static artifacts are preserved. Candidate discovery remains fixed
+fit's audit. Reports include rank IC (time-series Spearman correlation),
+RMSE versus the mean, per-validation-block and per-test-year diagnostics, and
+non-overlapping test metrics. Common and requested evaluation counts expose
+coverage loss. IC on overlapping targets is descriptive, not a significance test.
+Each horizon is evaluated separately; this is not an IC-decay curve of one fixed
+signal. Static artifacts are preserved. Candidate discovery remains fixed
 for a run; rolling training does not remove the documented Yahoo universe bias
 or automatically refresh SEC relationships every month.
 
